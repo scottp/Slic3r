@@ -400,7 +400,10 @@ sub _Gx {
         $F = $self->speed eq 'retract'
             ? ($self->extruder->retract_speed_mm_min)
             : $self->speeds->{$self->speed} // $self->speed;
-        if ($e && $self->layer && $self->layer->id == 0 && $comment !~ /retract/) {
+        if ($e && $self->layer 
+               && $self->layer->id <= ($Slic3r::Config->first_layer_count - 1)
+               && $comment !~ /retract/
+        ) {
             $F = $Slic3r::Config->first_layer_speed =~ /^(\d+(?:\.\d+)?)%$/
                 ? ($F * $1/100)
                 : $Slic3r::Config->first_layer_speed * 60;

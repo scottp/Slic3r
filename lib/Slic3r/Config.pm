@@ -317,6 +317,14 @@ our $Options = {
         type    => 'f',
         default => '30%',
     },
+    'first_layer_count' => {
+        label   => 'How many layers for slow speed',
+        tooltip => '1 = first layer',
+        sidetext => 'layers',
+        cli     => 'first-layer-count=s',
+        type    => 'f',
+        default => '1',
+    },
     
     # acceleration options
     'acceleration' => {

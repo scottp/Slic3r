@@ -428,7 +428,7 @@ sub build {
         },
         {
             title => 'Modifiers',
-            options => [qw(first_layer_speed)],
+            options => [qw(first_layer_speed first_layer_count)],
         },
     ]);
     
