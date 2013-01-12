@@ -748,7 +748,6 @@ sub write_gcode {
             $gcodegen->set_shift(@shift);
             $gcode .= $gcodegen->set_extruder($self->extruders->[0]);  # move_z requires extruder
             $gcode .= $gcodegen->move_z($gcodegen->layer->print_z);
-            $gcode .= $gcodegen->set_acceleration($Slic3r::Config->perimeter_acceleration);
             # skip skirt if we have a large brim
             if ($layer_id < $Slic3r::Config->skirt_height) {
                 # distribute skirt loops across all extruders
@@ -807,7 +806,10 @@ sub write_gcode {
                 # extrude perimeters
                 if (@{ $layerm->perimeters }) {
                     $gcode .= $gcodegen->set_extruder($region->extruders->{perimeter});
+                    $gcode .= $gcodegen->set_acceleration($Slic3r::Config->perimeter_acceleration);
                     $gcode .= $gcodegen->extrude($_, 'perimeter') for @{ $layerm->perimeters };
+                    $gcode .= $gcodegen->set_acceleration($Slic3r::Config->default_acceleration)
+                        if $Slic3r::Config->perimeter_acceleration;
                 }
                 
                 # extrude fills
@@ -822,6 +824,8 @@ sub write_gcode {
                             $gcode .= $gcodegen->extrude($fill, 'fill') ;
                         }
                     }
+                    $gcode .= $gcodegen->set_acceleration($Slic3r::Config->default_acceleration)
+                        if $Slic3r::Config->infill_acceleration;
                 }
             }
         }
@@ -912,7 +916,6 @@ sub write_gcode {
     # write end commands to file
     print $fh $gcodegen->retract;
     print $fh $gcodegen->set_fan(0);
-    print $fh "M501 ; reset acceleration\n" if $Slic3r::Config->acceleration;
     printf $fh "%s\n", $Slic3r::Config->replace_options($Slic3r::Config->end_gcode);
     
     printf $fh "; filament used = %.1fmm (%.1fcm3)\n",
