@@ -242,11 +242,7 @@ sub object_copies {
 
 sub layer_count {
     my $self = shift;
-    my $count = 0;
-    foreach my $object (@{$self->objects}) {
-        $count = @{$object->layers} if @{$object->layers} > $count;
-    }
-    return $count;
+    return max(map { scalar @{$_->layers} } @{$self->objects});
 }
 
 sub regions_count {
@@ -472,7 +468,7 @@ sub export_svg {
     my $output_file = $self->expanded_output_filepath($params{output_file});
     $output_file =~ s/\.gcode$/.svg/i;
     
-    open my $fh, ">", $output_file or die "Failed to open $output_file for writing\n";
+    Slic3r::open(\my $fh, ">", $output_file) or die "Failed to open $output_file for writing\n";
     print "Exporting to $output_file...";
     my $print_size = $self->size;
     print $fh sprintf <<"EOF", unscale($print_size->[X]), unscale($print_size->[Y]);
@@ -550,10 +546,10 @@ sub make_skirt {
     return unless $Slic3r::Config->skirts > 0;
     
     # collect points from all layers contained in skirt height
-    my $skirt_height = $Slic3r::Config->skirt_height;
-    $skirt_height = $self->layer_count if $skirt_height > $self->layer_count;
     my @points = ();
     foreach my $obj_idx (0 .. $#{$self->objects}) {
+        my $skirt_height = $Slic3r::Config->skirt_height;
+        $skirt_height = $self->objects->[$obj_idx]->layer_count if $skirt_height > $self->objects->[$obj_idx]->layer_count;
         my @layers = map $self->objects->[$obj_idx]->layers->[$_], 0..($skirt_height-1);
         my @layer_points = (
             (map @$_, map @$_, map @{$_->slices}, @layers),
@@ -647,7 +643,7 @@ sub write_gcode {
     if (ref $file eq 'IO::Scalar') {
         $fh = $file;
     } else {
-        open $fh, ">", $file
+        Slic3r::open(\$fh, ">", $file)
             or die "Failed to open $file for writing\n";
     }
     
@@ -675,7 +671,8 @@ sub write_gcode {
     
     # set up our extruder object
     my $gcodegen = Slic3r::GCode->new(
-        multiple_extruders => (@{$self->extruders} > 1),
+        multiple_extruders  => (@{$self->extruders} > 1),
+        layer_count         => $self->layer_count,
     );
     my $min_print_speed = 60 * $Slic3r::Config->min_print_speed;
     my $dec = $gcodegen->dec;
@@ -700,7 +697,7 @@ sub write_gcode {
     print  $fh "G21 ; set units to millimeters\n";
     if ($Slic3r::Config->gcode_flavor =~ /^(?:reprap|teacup)$/) {
         printf $fh $gcodegen->reset_e;
-        if ($Slic3r::Config->gcode_flavor =~ /^(?:reprap|makerbot)$/) {
+        if ($Slic3r::Config->gcode_flavor =~ /^(?:reprap|makerbot|sailfish)$/) {
             if ($Slic3r::Config->use_relative_e_distances) {
                 print $fh "M83 ; use relative distances for extrusion\n";
             } else {
@@ -716,9 +713,29 @@ sub write_gcode {
         $Slic3r::Config->print_center->[Y] - (unscale ($print_bb[Y2] - $print_bb[Y1]) / 2) - unscale $print_bb[Y1],
     );
     
+    # initialize a motion planner for object-to-object travel moves
+    if ($Slic3r::Config->avoid_crossing_perimeters) {
+        my $distance_from_objects = 1;
+        # compute the offsetted convex hull for each object and repeat it for each copy.
+        my @islands = ();
+        foreach my $obj_idx (0 .. $#{$self->objects}) {
+            my @island = Slic3r::ExPolygon->new(convex_hull([
+                map @{$_->contour}, map @{$_->slices}, @{$self->objects->[$obj_idx]->layers},
+            ]))->translate(scale $shift[X], scale $shift[Y])->offset_ex(scale $distance_from_objects, 1, JT_SQUARE);
+            foreach my $copy (@{ $self->objects->[$obj_idx]->copies }) {
+                push @islands, map $_->clone->translate(@$copy), @island;
+            }
+        }
+        $gcodegen->external_mp(Slic3r::GCode::MotionPlanner->new(
+            islands     => union_ex([ map @$_, @islands ]),
+            no_internal => 1,
+        ));
+    }
+    
     # prepare the logic to print one layer
     my $skirt_done = 0;  # count of skirt layers done
     my $brim_done = 0;
+    my $last_obj_copy = "";
     my $extrude_layer = sub {
         my ($layer_id, $object_copies) = @_;
         my $gcode = "";
@@ -733,7 +750,7 @@ sub write_gcode {
         }
         
         # set new layer, but don't move Z as support material interfaces may need an intermediate one
-        $gcodegen->layer($self->objects->[$object_copies->[0][0]]->layers->[$layer_id]);
+        $gcode .= $gcodegen->change_layer($self->objects->[$object_copies->[0][0]]->layers->[$layer_id]);
         $gcodegen->elapsed_time(0);
         
         # prepare callback to call as soon as a Z command is generated
@@ -761,6 +778,7 @@ sub write_gcode {
                 }
             }
             $skirt_done++;
+            $gcodegen->straight_once(1);
         }
         
         # extrude brim
@@ -770,10 +788,13 @@ sub write_gcode {
             $gcodegen->set_shift(@shift);
             $gcode .= $gcodegen->extrude_loop($_, 'brim') for @{$self->brim};
             $brim_done = 1;
+            $gcodegen->straight_once(1);
         }
         
         for my $obj_copy (@$object_copies) {
             my ($obj_idx, $copy) = @$obj_copy;
+            $gcodegen->new_object(1) if $last_obj_copy && $last_obj_copy ne "${obj_idx}_${copy}";
+            $last_obj_copy = "${obj_idx}_${copy}";
             my $layer = $self->objects->[$obj_idx]->layers->[$layer_id];
             
             $gcodegen->set_shift(map $shift[$_] + unscale $copy->[$_], X,Y);
