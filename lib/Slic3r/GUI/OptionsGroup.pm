@@ -210,13 +210,14 @@ sub _build_field {
             $field->SetSelection(grep $opt->{values}[$_] eq $_[0], 0..$#{$opt->{values}});
         };
         $self->_setters->{$opt_key}->($opt->{default});
-        my %tmp_lookup;
-        @tmp_lookup{@{$opt->{values}}} = @{$opt->{labels}};
-        $tooltip .= " (default: " . $tmp_lookup{$opt->{default}} .  ")" if ($opt->{default});
+
+        $tooltip .= " (default: " 
+                 . $opt->{labels}[ first { $opt->{values}[$_] eq $opt->{default} } 0..$#{$opt->{values}} ] 
+                 . ")" if ($opt->{default});
     } else {
         die "Unsupported option type: " . $opt->{type};
     }
-    if ($opt->{tooltip} && $field->can('SetToolTipString')) {
+    if ($tooltip && $field->can('SetToolTipString')) {
         $field->SetToolTipString($tooltip);
     }
     return $field;
